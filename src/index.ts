@@ -15,7 +15,7 @@ const execAsync = promisify(exec);
 const server = new Server(
   {
     name: "mcp-local-sandbox-cleaner",
-    version: "0.1.0",
+    version: "0.2.0",
   },
   {
     capabilities: {
@@ -24,7 +24,7 @@ const server = new Server(
   }
 );
 
-// Common temporary artifact patterns left by AI agents & test runners
+// Standard transient artifact markers commonly generated during AI coding turns
 const DEFAULT_CLEANUP_TARGETS = [
   ".scratch",
   ".agent-tmp",
@@ -42,13 +42,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "scan_sandbox_artifacts",
         description:
-          "Scan a target workspace for dangling temporary test outputs, agent scratches, and bloated caches.",
+          "Scan a target workspace for dangling temporary test outputs, agent scratches, and bloated caches, with optional file age threshold.",
         inputSchema: {
           type: "object",
           properties: {
             workspacePath: {
               type: "string",
               description: "Absolute or relative path to the workspace root.",
+            },
+            minAgeMinutes: {
+              type: "number",
+              description:
+                "Optional minimum age in minutes since last modification (default: 0). Set e.g. 15 to avoid touching files currently in use by an ongoing turn.",
             },
           },
           required: ["workspacePath"],
@@ -57,7 +62,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "clean_sandbox_artifacts",
         description:
-          "Safely delete verified transient files and directories (like .scratch, .pytest_cache) to recover disk space.",
+          "Safely sweep verified transient files and directories to recover disk space and maintain repository cleanliness.",
         inputSchema: {
           type: "object",
           properties: {
@@ -67,7 +72,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             dryRun: {
               type: "boolean",
-              description: "If true, only report what would be deleted without taking action.",
+              description:
+                "If true, only report what would be deleted without actually deleting.",
+            },
+            minAgeMinutes: {
+              type: "number",
+              description:
+                "Minimum age in minutes. Files modified more recently will be skipped to avoid disrupting active agent sessions.",
             },
           },
           required: ["workspacePath"],
@@ -83,7 +94,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             ports: {
               type: "array",
               items: { type: "number" },
-              description: "Optional list of port numbers to check. Defaults to common dev ports.",
+              description:
+                "Optional list of port numbers to check. Defaults to standard dev ports [3000, 3001, 5173, 5174, 8000, 8080, 8888].",
             },
           },
         },
@@ -98,13 +110,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     if (name === "scan_sandbox_artifacts") {
       const workspace = String(args?.workspacePath || ".");
-      const found: { name: string; fullPath: string; isDir: boolean }[] = [];
+      const minAge = Number(args?.minAgeMinutes || 0);
+      const now = Date.now();
+      const found: { name: string; fullPath: string; isDir: boolean; ageMinutes: number }[] = [];
 
       for (const target of DEFAULT_CLEANUP_TARGETS) {
         const full = path.resolve(workspace, target);
         try {
           const stat = await fs.stat(full);
-          found.push({ name: target, fullPath: full, isDir: stat.isDirectory() });
+          const ageMinutes = Math.floor((now - stat.mtimeMs) / (1000 * 60));
+          if (ageMinutes >= minAge) {
+            found.push({
+              name: target,
+              fullPath: full,
+              isDir: stat.isDirectory(),
+              ageMinutes,
+            });
+          }
         } catch {
           // not found, ignore
         }
@@ -117,6 +139,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: JSON.stringify(
               {
                 workspace: path.resolve(workspace),
+                minAgeFilterMinutes: minAge,
                 totalFound: found.length,
                 artifacts: found,
               },
@@ -131,16 +154,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "clean_sandbox_artifacts") {
       const workspace = String(args?.workspacePath || ".");
       const dryRun = Boolean(args?.dryRun ?? false);
-      const cleaned: string[] = [];
+      const minAge = Number(args?.minAgeMinutes || 0);
+      const now = Date.now();
+      const cleaned: { path: string; ageMinutes: number }[] = [];
+      const skippedActive: { path: string; ageMinutes: number }[] = [];
 
       for (const target of DEFAULT_CLEANUP_TARGETS) {
         const full = path.resolve(workspace, target);
         try {
-          await fs.stat(full);
+          const stat = await fs.stat(full);
+          const ageMinutes = Math.floor((now - stat.mtimeMs) / (1000 * 60));
+
+          if (ageMinutes < minAge) {
+            skippedActive.push({ path: full, ageMinutes });
+            continue;
+          }
+
           if (!dryRun) {
             await fs.rm(full, { recursive: true, force: true });
           }
-          cleaned.push(full);
+          cleaned.push({ path: full, ageMinutes });
         } catch {
           // ignore missing
         }
@@ -152,9 +185,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             type: "text",
             text: JSON.stringify(
               {
-                mode: dryRun ? "dry-run (no files deleted)" : "live-cleaned",
+                mode: dryRun ? "dry-run (preview only)" : "executed",
                 deletedCount: cleaned.length,
-                items: cleaned,
+                deleted: cleaned,
+                skippedActiveSessions: skippedActive,
               },
               null,
               2
@@ -176,16 +210,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (process.platform === "win32") {
             const { stdout } = await execAsync(`netstat -ano | findstr :${p}`);
             if (stdout && stdout.trim().length > 0) {
-              occupied.push({ port: p, status: "LISTENING / OCCUPIED" });
+              occupied.push({ port: p, status: "OCCUPIED" });
             }
           } else {
             const { stdout } = await execAsync(`lsof -i :${p}`);
             if (stdout && stdout.trim().length > 0) {
-              occupied.push({ port: p, status: "LISTENING / OCCUPIED" });
+              occupied.push({ port: p, status: "OCCUPIED" });
             }
           }
         } catch {
-          // port free
+          // free
         }
       }
 
@@ -211,7 +245,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("mcp-local-sandbox-cleaner running on stdio");
+  console.error("mcp-local-sandbox-cleaner v0.2.0 active");
 }
 
 main().catch((err) => {
