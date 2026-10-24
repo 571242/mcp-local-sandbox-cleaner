@@ -1,71 +1,83 @@
-# 🧹 mcp-local-sandbox-cleaner
+# mcp-local-sandbox-cleaner
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![MCP Standard](https://img.shields.io/badge/MCP-Standard%20v1.0-brightgreen.svg)](https://modelcontextprotocol.io)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/571242/mcp-local-sandbox-cleaner/pulls)
+An MCP server that finds the junk coding agents leave behind in a workspace:
+scratch directories, test caches, and dev ports that may no longer be serving
+anything. It can delete the files; it only reports the ports.
 
-> **Keep your local dev environment spotless while coding with AI Agents.**  
-> An automated Model Context Protocol (MCP) server that audits, safely removes transient test scratchpads, and detects dangling dev ports left behind by AI Agents (Claude Code, Cursor, Codex).
+Not published to npm — build it from source.
 
----
+## Install
 
-## ⚡ Why Do You Need This?
+```sh
+pnpm install
+pnpm build
+```
 
-When using autonomous coding agents or terminal AI harnesses, your workspace quickly becomes cluttered with:
-- 🗑️ Forgotten `.scratch/`, `.agent-tmp/`, and ad-hoc probe scripts.
-- 📁 Bloated test caches (`.pytest_cache/`, `coverage/`, `.turbo/`).
-- 🔌 Zombie test servers hogging your development ports (`3000`, `5173`, `8000`).
-
-`mcp-local-sandbox-cleaner` gives your AI assistant the self-cleaning reflex: scan and sweep temporary clutter before concluding every session.
-
----
-
-## 🛠️ Features
-
-- **🔍 Smart Artifact Auditing**: Detects well-known transient directories without touching production code or git-tracked source.
-- **🛡️ Dry-Run First**: Supports previewing deletions before executing to guarantee zero accidental loss.
-- **🔌 Zombie Port Detective**: Instantly catches background Vite/Next.js/FastAPI processes that failed to exit gracefully.
-- **📦 Zero-Config Stdio**: Plug-and-play with any MCP-compliant client.
-
----
-
-## 🚀 Quick Start & Integration
-
-### 1. Claude Desktop Configuration
-
-Add the following to your `claude_desktop_config.json`:
+Point your MCP client at `dist/index.js`:
 
 ```json
 {
   "mcpServers": {
     "sandbox-cleaner": {
-      "command": "npx",
-      "args": ["-y", "mcp-local-sandbox-cleaner"]
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-local-sandbox-cleaner/dist/index.js"]
     }
   }
 }
 ```
 
-### 2. Cursor / Codex IDE Integration
+## Tools
 
-Enable MCP in your settings and register the command:
-```bash
-npx -y mcp-local-sandbox-cleaner
-```
+### `scan_sandbox_artifacts`
 
----
+Lists matching paths and how long ago each was modified.
 
-## 📖 Available Tools
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `workspacePath` | string | Workspace root. |
+| `minAgeMinutes` | number | Skip anything modified more recently than this. Defaults to 0. |
 
-| Tool | Parameters | Description |
-| :--- | :--- | :--- |
-| `scan_sandbox_artifacts` | `workspacePath: string` | Scans and lists all temporary directories and clutter in the workspace. |
-| `clean_sandbox_artifacts` | `workspacePath: string, dryRun?: boolean` | Sweeps away transient artifacts. Set `dryRun: true` to preview. |
-| `inspect_dangling_dev_ports` | `ports?: number[]` | Checks if common development ports (3000, 5173, etc.) are dangling. |
+Looks for these names directly under the workspace root, no recursion:
+`.scratch`, `.agent-tmp`, `tmp_test_output`, `.pytest_cache`, `.coverage`,
+`coverage`, `.turbo`, `.tsbuildinfo`.
 
----
+`.tsbuildinfo` is matched as that exact filename, so it will not catch the
+`tsconfig.tsbuildinfo` files the TypeScript compiler actually writes. The list
+is a plain array at the top of `src/index.ts`; edit it to suit your workspace.
 
-## 🤝 Contributing & License
+### `clean_sandbox_artifacts`
 
-Contributions, feature requests, and bug reports are warmly welcome!  
-Distributed under the [MIT License](LICENSE).
+Deletes what `scan_sandbox_artifacts` would list.
+
+| Argument | Type | Meaning |
+| --- | --- | --- |
+| `workspacePath` | string | Workspace root. |
+| `dryRun` | boolean | Report without deleting. Defaults to false. |
+| `minAgeMinutes` | number | Skip recently modified paths. Defaults to 0. |
+
+Two things to know before running this without `dryRun`:
+
+- **It does not consult git.** A tracked file inside `.scratch/` is deleted like
+  anything else. Run with `dryRun: true` first if that matters.
+- `coverage` is matched by name at the workspace root. If you keep real source
+  in a directory called `coverage`, it goes.
+
+`minAgeMinutes` is the guard against deleting a directory an agent is still
+writing to. Set it to something like 15 to leave in-flight work alone.
+
+### `inspect_dangling_dev_ports`
+
+Reports which of the given ports are in use. Defaults to
+`3000, 3001, 5173, 5174, 8000, 8080, 8888`.
+
+It does not identify the owning process and does not kill anything. Despite the
+name, the check is just "is this port occupied" — a healthy dev server and a
+zombie one look the same.
+
+On Windows the match goes through `findstr`, which is a substring test: probing
+`3000` also reports listeners on `13000` and `30000`. On Linux it uses
+`lsof -i`, which matches the port exactly.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

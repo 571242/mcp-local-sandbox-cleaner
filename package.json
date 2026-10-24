@@ -1,7 +1,7 @@
 {
   "name": "mcp-local-sandbox-cleaner",
-  "version": "0.1.0",
-  "description": "A lightweight Model Context Protocol (MCP) server designed to audit, clean up stale sandbox artifacts, zombie test processes, and dangling dev ports for AI coding agents.",
+  "version": "0.2.0",
+  "description": "MCP server that scans and removes leftover scratch directories, test caches and stale dev ports in an agent workspace.",
   "main": "dist/index.js",
   "bin": {
     "mcp-local-sandbox-cleaner": "dist/index.js"
@@ -17,10 +17,7 @@
     "model-context-protocol",
     "sandbox",
     "cleaner",
-    "ai-agent",
-    "dev-tools",
-    "cursor",
-    "claude-desktop"
+    "dev-tools"
   ],
   "author": "Li Hua <3571242@gmail.com>",
   "license": "MIT",

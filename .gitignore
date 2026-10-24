@@ -1,5 +1,5 @@
 node_modules/
-dist/
 .DS_Store
 *.log
 .pnpm-debug.log*
+.dsh-ops-update-*.lock

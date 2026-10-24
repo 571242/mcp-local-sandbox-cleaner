@@ -42,7 +42,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "scan_sandbox_artifacts",
         description:
-          "Scan a target workspace for dangling temporary test outputs, agent scratches, and bloated caches, with optional file age threshold.",
+          "Scan a workspace root for leftover scratch directories and test caches, with an optional age threshold. Top level only, no recursion.",
         inputSchema: {
           type: "object",
           properties: {
@@ -62,7 +62,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "clean_sandbox_artifacts",
         description:
-          "Safely sweep verified transient files and directories to recover disk space and maintain repository cleanliness.",
+          "Delete the scratch directories and caches that scan_sandbox_artifacts reports. Does not consult git; use dryRun to preview.",
         inputSchema: {
           type: "object",
           properties: {
@@ -87,7 +87,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "inspect_dangling_dev_ports",
         description:
-          "Detect orphaned local development ports (e.g. 3000, 5173, 8000, 8080) left behind by stopped agent runs.",
+          "Report which of the given ports are currently in use. Does not identify the owning process or kill anything.",
         inputSchema: {
           type: "object",
           properties: {
@@ -208,8 +208,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       for (const p of portsToCheck) {
         try {
           if (process.platform === "win32") {
-            const { stdout } = await execAsync(`netstat -ano | findstr :${p}`);
-            if (stdout && stdout.trim().length > 0) {
+            // netstat prints one row per socket; match the local address column
+            // exactly so probing 3000 does not also hit 13000 or 30000.
+            const { stdout } = await execAsync("netstat -ano");
+            const listening = stdout.split(/\r?\n/).some((line) => {
+              const cols = line.trim().split(/\s+/);
+              const local = cols[1] || "";
+              return local.endsWith(`:${p}`);
+            });
+            if (listening) {
               occupied.push({ port: p, status: "OCCUPIED" });
             }
           } else {
